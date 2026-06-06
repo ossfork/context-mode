@@ -1374,8 +1374,20 @@ commit_strong_cadence, commit_fix_heavy</span></pre>
 
     <div class="faq rev">
       <details>
-        <summary>Is Insights live yet? How do I get in?</summary>
-        <p><strong>Private beta.</strong> Insights is onboarding 5 design-partner orgs first. <a href="#waitlist">Join the waitlist</a> for early access — design-partner terms (free Team-tier access during the design phase) are discussed there. Pricing is intentionally not published yet — it will be shaped with the first cohort. The OSS plugin remains fully usable today, no waitlist, no account.</p>
+        <summary>How much does Insights cost?</summary>
+        <p>Pro tier is <strong>$20 per seat per month</strong>. Per-seat means per member of your org (active or invited). Billed monthly. No annual variant, no volume discount, no Enterprise SKU, no free tier, no trial. Self-serve at <a href="https://platform.context-mode.com/signup">platform.context-mode.com/signup</a>.</p>
+      </details>
+      <details>
+        <summary>Can I try it free?</summary>
+        <p>The context-mode <strong>OSS collector is free forever</strong> &mdash; install it from the <a href="https://github.com/mksglu/context-mode">GitHub README</a> to run analytics locally on your own machine. The Platform layer (the thing you would see at platform.context-mode.com) is paid from day one. There is no Insights trial.</p>
+      </details>
+      <details>
+        <summary>What is your refund policy?</summary>
+        <p>No refunds. You can cancel any time from the Stripe Customer Portal &mdash; your subscription ends at the close of the current billing period. No partial-month credits. Member adds and removes mid-cycle sync to Stripe as quantity changes, billed pro-rated on the next invoice.</p>
+      </details>
+      <details>
+        <summary>Do you offer SSO / SAML / SOC 2?</summary>
+        <p>Not yet. The single Pro tier intentionally has no Enterprise features so we can keep one price for everyone. If your buying process requires SSO or a SOC 2 report, run the OSS collector self-hosted (free, ELv2 source-available); we will revisit Enterprise after the first Series A.</p>
       </details>
       <details>
         <summary>What data do you ingest?</summary>
@@ -1391,7 +1403,7 @@ commit_strong_cadence, commit_fix_heavy</span></pre>
       </details>
       <details>
         <summary>How are the patterns built?</summary>
-        <p>Empirically, from real session telemetry across the OSS adapter surface (15 platform integrations on the OSS side; 10 currently exposed in the Insights install CLI — Claude Code, Codex, Gemini, Qwen, Cursor, OpenCode, Kimi, VS Code Copilot, JetBrains Copilot, and Kiro). The catalog ships <strong>219 patterns</strong> across <strong>8 categories</strong> (adoption, effectiveness, efficiency, quality, workflow, engagement, prompt, security), each one wired through <code>getMetricValue</code> + <code>AggregateData</code> in the engine and independently testable. Every pattern is SQL + threshold + severity + suggested action, audited against existing event flows.</p>
+        <p>Empirically, from real session telemetry across the OSS adapter surface (16 platform integrations on the OSS side; 14 currently exposed in the Insights install CLI — Claude Code, Codex, Cursor, Gemini CLI, JetBrains Copilot, Kiro, Qwen Code, VS Code Copilot, Kilo, OpenClaw, OpenCode, Antigravity, Pi, and Zed). The catalog ships <strong>222 patterns</strong> across <strong>9 categories</strong> (adoption, effectiveness, efficiency, quality, workflow, engagement, prompt, security, cost), each one wired through <code>getMetricValue</code> + <code>AggregateData</code> in the engine and independently testable. Every pattern is SQL + threshold + severity + suggested action, audited against existing event flows.</p>
       </details>
       <details>
         <summary>What is the agentic / MCP angle?</summary>
@@ -1402,21 +1414,13 @@ commit_strong_cadence, commit_fix_heavy</span></pre>
         <p>Yes by construction. Commit Quality classifier uses Conv Commits ASCII prefix (cross-language) + structural signals (issue refs, file paths) — never English verb dictionaries. Prompt features use Unicode property regex (`\p{Script=X}`, `\p{L}+`) — never language detection libraries. Streaming topics use DF-ratio (count / N_prompts) which is organic to the org's actual vocabulary, Turkish or otherwise.</p>
       </details>
       <details>
-        <summary>On-prem option?</summary>
-        <p>Available for design partners on request. The stack runs on Cloudflare Workers + D1 + Durable Objects — deployable to any Cloudflare account the customer controls, with the D1 schema and pattern catalog open. Fully air-gapped self-hosted SOC2 / FedRAMP work is custom — <a href="#waitlist">join the waitlist</a> for design-partner inquiries.</p>
-      </details>
-      <details>
-        <summary>What other Solutions are on the roadmap?</summary>
-        <p>Insights is the first Solution from Context Mode Platform. Two more on the roadmap: <strong>Audit</strong> turns the event stream into compliance reports for the CISO persona. <strong>Risk Score</strong> scores AI-authored changes inside a PR for the DevOps Lead persona, exposed as a GitHub Action. Neither ships in v1 — design partners welcome.</p>
-      </details>
-      <details>
         <summary>How does Insights relate to Context Mode Platform?</summary>
-        <p><strong>Context Mode Platform</strong> is the umbrella — the OSS plugin, the event ingestion layer, the pattern engine, the dashboard, the remote MCP. <strong>Insights</strong> is the first Solution built on top of it: the org-layer analytics surface, role-tuned, persona-aware. Future Solutions (Audit, Risk Score) ride the same data layer.</p>
+        <p><strong>Context Mode Platform</strong> is the umbrella — the OSS plugin, the event ingestion layer, the pattern engine, the dashboard, the remote MCP. <strong>Insights</strong> is the first Solution built on top of it: the org-layer analytics surface, role-tuned, persona-aware. Two more Solutions are on the roadmap: <strong>Audit</strong> turns the event stream into compliance reports for the CISO persona; <strong>Risk Score</strong> scores AI-authored changes inside a PR for the DevOps Lead persona, exposed as a GitHub Action.</p>
       </details>
     </div>
 
     <div class="gtm-strip rev">
-      <a href="#waitlist" class="cta pri">Still have questions? Join the waitlist →</a>
+      <a href="https://platform.context-mode.com/signup" class="cta pri">Start for $20 / seat →</a>
     </div>
   </div>
 </section>
