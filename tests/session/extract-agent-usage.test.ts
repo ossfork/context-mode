@@ -19,7 +19,7 @@
  * forward-compatible Zod envelope accepts them today (no migration).
  */
 
-import { describe, test, expect } from "vitest";
+import { describe, test, expect, vi } from "vitest";
 import { extractEvents } from "../../src/session/extract.js";
 
 function agentUsageOf(toolResponse: unknown, toolName: string = "Task") {
@@ -211,7 +211,12 @@ describe("extractAgentUsage — Issue #4 AgentOutput.usage capture", () => {
     expect(events[0].data).toMatch(/cost_usd:0\.0147/);
   });
 
-  test("cost_usd: unknown model falls back to default Sonnet pricing", () => {
+  test("cost_usd: unknown model → no cost emitted (was: wrong Claude fallback)", () => {
+    // Catalog rewire — an unmatched model id no longer inherits Claude-Sonnet's
+    // rate (the old `default` bug). It resolves to null cost, so the event is
+    // still emitted (token counts) but carries NO cost_usd token. The catalog
+    // also console.warns the unmatched id once; silence it here.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const events = extractEvents({
       tool_name: "Task",
       tool_input: { model: "claude-future-model-99" },
@@ -220,7 +225,9 @@ describe("extractAgentUsage — Issue #4 AgentOutput.usage capture", () => {
         usage: { input_tokens: 1000, output_tokens: 500 },
       }),
     }).filter((e) => e.type === "agent_usage");
-    expect(events[0].data).toMatch(/cost_usd:0\.0105/);
+    warn.mockRestore();
+    expect(events.length).toBe(1);
+    expect(events[0].data).not.toMatch(/cost_usd:/);
   });
 
   test("cost_usd: Opus 4.8 priced at same standard rate as Opus 4.7", () => {
@@ -255,7 +262,10 @@ describe("extractAgentUsage — Issue #4 AgentOutput.usage capture", () => {
     expect(events[0].data).toMatch(/cost_usd:0\.0035/);
   });
 
-  test("cost_usd: no model + token counts → still computes with default pricing", () => {
+  test("cost_usd: no model id → no cost emitted (cannot price without a model)", () => {
+    // Catalog rewire — without a model id there is no row to price from, so no
+    // cost_usd is blended. The empty id is not warned (it is not a real miss).
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const events = extractEvents({
       tool_name: "Task",
       tool_input: {},
@@ -263,7 +273,9 @@ describe("extractAgentUsage — Issue #4 AgentOutput.usage capture", () => {
         usage: { input_tokens: 1000, output_tokens: 500 },
       }),
     }).filter((e) => e.type === "agent_usage");
-    expect(events[0].data).toMatch(/cost_usd:/);
+    warn.mockRestore();
+    expect(events.length).toBe(1);
+    expect(events[0].data).not.toMatch(/cost_usd:/);
   });
 
   test("cost_usd: zero tokens → cost_usd:0 not emitted (skip)", () => {

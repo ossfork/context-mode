@@ -5,6 +5,11 @@
  * All 13 event categories as specified in PRD Section 3.
  */
 
+import {
+  lookupPrice as catalogLookupPrice,
+  computeCostUsd as catalogComputeCostUsd,
+} from "../pricing/catalog.js";
+
 // ── Public interfaces ──────────────────────────────────────────────────────
 
 export interface SessionEvent {
@@ -1339,62 +1344,92 @@ function extractFileReadMetadata(input: HookInput): SessionEvent[] {
 }
 
 /**
- * Per-model USD price table — Anthropic public list pricing, $/MTok.
- * Verified against platform.claude.com/docs/en/about-claude/pricing,
- * cloudzero.com, finout.io 2026-06 (cache: 5-min cache_write = 1.25× input,
- * cache_read = 0.10× input). Fast-mode variants (e.g. opus-4-8-fast at
- * $10/$50) are intentionally NOT mapped — they ship as separate model
- * ids and would dilute the standard-tier dashboards if blended here.
+ * Per-model USD pricing now lives in the curated multi-vendor catalog
+ * (src/pricing/catalog.ts), which prices each model from ITS OWN row across
+ * Anthropic / OpenAI / Google / Chinese / other vendors. This kills the old
+ * bug where the hardcoded Anthropic-only table here billed every non-Claude
+ * model at Claude-Sonnet's `default` rate. Unknown ids now resolve to a null
+ * cost (one console.warn) instead of a silently wrong Claude rate.
  *
- * NOTE: 16-oss-verify-gap-prd Gap #1 quoted Opus at $15/$75 — that is
- * the prior Opus 4 (non-4.7) rate. Opus 4.7 and 4.8 ship at $5/$25.
+ * resolveModelId picks the first non-empty model id from the hook candidates;
+ * date-suffixed ids (e.g. claude-haiku-4-5-20251001) are reduced to a catalog
+ * hit by progressively dropping trailing `-segment` suffixes (NO regex).
  */
-const MODEL_PRICING_USD_PER_MTOK: Record<string, {
-  input: number;
-  output: number;
-  cache_write: number;
-  cache_read: number;
-}> = {
-  "claude-opus-4-8":   { input: 5.00, output: 25.00, cache_write: 6.25, cache_read: 0.50 },
-  "claude-opus-4-7":   { input: 5.00, output: 25.00, cache_write: 6.25, cache_read: 0.50 },
-  "claude-sonnet-4-6": { input: 3.00, output: 15.00, cache_write: 3.75, cache_read: 0.30 },
-  "claude-haiku-4-5":  { input: 1.00, output:  5.00, cache_write: 1.25, cache_read: 0.10 },
-  default:             { input: 3.00, output: 15.00, cache_write: 3.75, cache_read: 0.30 },
-};
-
-function resolveModelKey(input: HookInput, parsedResp: Record<string, unknown>): string {
+function resolveModelId(input: HookInput, parsedResp: Record<string, unknown>): string {
   const candidates: unknown[] = [
     input.tool_input?.model,
     (input as unknown as Record<string, unknown>).model,
     parsedResp.model,
   ];
-  const keys = Object.keys(MODEL_PRICING_USD_PER_MTOK).filter((k) => k !== "default");
   for (const c of candidates) {
-    if (typeof c !== "string" || c.length === 0) continue;
-    if (c in MODEL_PRICING_USD_PER_MTOK) return c;
-    // Prefix match for date-suffixed model ids
-    // (e.g. claude-haiku-4-5-20251001 → claude-haiku-4-5)
-    for (const key of keys) {
-      if (c.startsWith(key)) return key;
-    }
+    if (typeof c === "string" && c.length > 0) return c;
   }
-  return "default";
+  return "";
 }
 
-function computeCostUsd(
-  modelKey: string,
+/**
+ * Drop one trailing `-<segment>` from a model id, char-algorithmically (no
+ * regex): walks back to the last '-' and returns the head, or null when there
+ * is no usable separator. Lets a date-suffixed id fall back to its base id
+ * (claude-haiku-4-5-20251001 → claude-haiku-4-5 → … ) one segment at a time.
+ */
+function dropTrailingSegment(id: string): string | null {
+  for (let i = id.length - 1; i > 0; i--) {
+    if (id.charCodeAt(i) === 45 /* '-' */) return id.slice(0, i);
+  }
+  return null;
+}
+
+/**
+ * Resolve a model id to one the catalog can price: try the raw id, then
+ * progressively trim trailing `-segment` suffixes so a date-suffixed id still
+ * prices off its base model. Probes with lookupPrice (no warn) and returns the
+ * first id that hits, or "" on a full miss — so cost compute warns at most once.
+ */
+function resolveCatalogId(modelId: string): string {
+  let candidate: string | null = modelId;
+  while (candidate && candidate.length > 0) {
+    if (catalogLookupPrice(candidate) !== null) return candidate;
+    candidate = dropTrailingSegment(candidate);
+  }
+  return "";
+}
+
+/**
+ * Cost for a turn via the catalog. Returns null on a price miss (catalog emits
+ * one console.warn of the unmatched id) or when all token buckets are zero.
+ */
+function computeTurnCostUsd(
+  modelId: string,
   inputTokens: number,
   outputTokens: number,
   cacheCreationTokens: number,
   cacheReadTokens: number,
-): number {
-  const price = MODEL_PRICING_USD_PER_MTOK[modelKey] ?? MODEL_PRICING_USD_PER_MTOK.default;
-  const totalMicroDollars =
-    inputTokens * price.input +
-    outputTokens * price.output +
-    cacheCreationTokens * price.cache_write +
-    cacheReadTokens * price.cache_read;
-  return totalMicroDollars / 1_000_000;
+): number | null {
+  const resolved = resolveCatalogId(modelId);
+  // Feed the resolved id when found; otherwise pass the raw id so the catalog's
+  // single miss-warning carries the id the operator actually saw.
+  return catalogComputeCostUsd(resolved || modelId, {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    cache_creation_tokens: cacheCreationTokens,
+    cache_read_tokens: cacheReadTokens,
+  });
+}
+
+/**
+ * Format a cost to a compact `cost_usd` string, char-algorithmically (no
+ * regex). Renders 6 decimals, drops trailing zeros, and keeps a single `.0`
+ * when the fraction trims to empty (e.g. 0 → "0.0"), matching the prior
+ * `.toFixed(6).replace(...)` output exactly.
+ */
+function formatCostUsd(cost: number): string {
+  let s = cost.toFixed(6);
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 48 /* '0' */) end--;
+  s = s.slice(0, end);
+  if (s.length > 0 && s.charCodeAt(s.length - 1) === 46 /* '.' */) s += "0";
+  return s;
 }
 
 /**
@@ -1454,9 +1489,11 @@ function extractAgentUsage(input: HookInput): SessionEvent[] {
     : 0;
   const anyTokens = inputTokens > 0 || outputTokens > 0 || cacheCreate > 0 || cacheRead > 0;
   if (anyTokens) {
-    const modelKey = resolveModelKey(input, out);
-    const cost = computeCostUsd(modelKey, inputTokens, outputTokens, cacheCreate, cacheRead);
-    parts.push(`cost_usd:${cost.toFixed(6).replace(/0+$/, "").replace(/\.$/, ".0")}`);
+    const modelId = resolveModelId(input, out);
+    // null ⇒ unmatched model id (catalog warned once) — skip the cost token
+    // rather than blend a wrong Claude rate (the old non-Claude bug).
+    const cost = computeTurnCostUsd(modelId, inputTokens, outputTokens, cacheCreate, cacheRead);
+    if (cost !== null) parts.push(`cost_usd:${formatCostUsd(cost)}`);
   }
 
   return [{

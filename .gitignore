@@ -39,5 +39,9 @@ context-mode-guidance-*/
 .claude-worktrees/
 .vibetree/
 .cw/
+# Dev-only pricing source: the full litellm catalog (~1.5MB) is the manual
+# refresh base for src/pricing/sources/*.json — never bundled into the plugin.
+# Refresh: see tools/pricing/litellm-NOTES.md. Keep NOTES tracked, ignore the blob.
+tools/pricing/litellm-catalog.json
 /.cocoindex_code/
 /.kilo/
