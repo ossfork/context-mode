@@ -140,8 +140,12 @@ describe("extractAgentUsage — Issue #4 AgentOutput.usage capture", () => {
     expect(events.filter((e) => e.type === "agent_usage").length).toBe(0);
   });
 
-  // Gap #1 (16-oss-verify-gap-prd §2) — cost_usd derivation
-  test("cost_usd: Sonnet pricing 1000 input + 500 output → 0.0105", () => {
+  // CUMULATIVE-USAGE GUARD (docs/handoff/cumulative-cost-bug.md) — a Task
+  // tool_response is the sub-agent's usage SUMMED across its whole run, so it
+  // must NOT be priced as a single turn. extractAgentUsage tags the event
+  // usage_scope="task_cumulative" and emits NO cost_usd. Per-model pricing
+  // correctness lives in pricing.test.ts + the per-turn transcript path.
+  test("Task usage is tagged task_cumulative and carries NO cost_usd", () => {
     const events = extractEvents({
       tool_name: "Task",
       tool_input: { model: "claude-sonnet-4-6" },
@@ -151,64 +155,31 @@ describe("extractAgentUsage — Issue #4 AgentOutput.usage capture", () => {
       }),
     }).filter((e) => e.type === "agent_usage");
     expect(events.length).toBe(1);
-    expect(events[0].data).toMatch(/cost_usd:0\.0105/);
+    expect(events[0].usage_scope).toBe("task_cumulative");
+    expect(events[0].cost_usd).toBeUndefined();
+    expect(events[0].data).not.toMatch(/cost_usd:/);
   });
 
-  test("cost_usd: Opus 4.7 pricing higher than Sonnet 4.6 for same tokens", () => {
-    const opus = extractEvents({
-      tool_name: "Task",
-      tool_input: { model: "claude-opus-4-7" },
-      tool_response: JSON.stringify({
-        totalTokens: 1500,
-        usage: { input_tokens: 1000, output_tokens: 500 },
-      }),
-    }).filter((e) => e.type === "agent_usage");
-    const sonnet = extractEvents({
-      tool_name: "Task",
-      tool_input: { model: "claude-sonnet-4-6" },
-      tool_response: JSON.stringify({
-        totalTokens: 1500,
-        usage: { input_tokens: 1000, output_tokens: 500 },
-      }),
-    }).filter((e) => e.type === "agent_usage");
-    const opusCost = Number(opus[0].data.match(/cost_usd:(\d+\.\d+)/)![1]);
-    const sonnetCost = Number(sonnet[0].data.match(/cost_usd:(\d+\.\d+)/)![1]);
-    // Opus 4.7 is $5/$25 vs Sonnet 4.6 $3/$15 — Opus runs ~1.67x Sonnet
-    expect(opusCost).toBeGreaterThan(sonnetCost);
-    expect(opusCost).toBeCloseTo(0.0175, 4);
-  });
-
-  test("cost_usd: Haiku pricing lower than Sonnet", () => {
-    const haiku = extractEvents({
-      tool_name: "Task",
-      tool_input: { model: "claude-haiku-4-5" },
-      tool_response: JSON.stringify({
-        totalTokens: 1500,
-        usage: { input_tokens: 1000, output_tokens: 500 },
-      }),
-    }).filter((e) => e.type === "agent_usage");
-    const haikuCost = Number(haiku[0].data.match(/cost_usd:(\d+\.\d+)/)![1]);
-    expect(haikuCost).toBeLessThan(0.01);
-  });
-
-  test("cost_usd: cache_creation + cache_read priced separately", () => {
+  test("cumulative billions (cache_read 4.7B) → no four-figure cost_usd poison", () => {
+    // The real prod bug: a Task tool_response with cumulative usage in the
+    // billions, priced as one turn, read $3,532. No cost_usd is derived now.
     const events = extractEvents({
       tool_name: "Task",
-      tool_input: { model: "claude-sonnet-4-6" },
+      tool_input: { model: "claude-opus-4-8" },
       tool_response: JSON.stringify({
-        totalTokens: 4000,
         usage: {
-          input_tokens: 1000,
-          output_tokens: 500,
-          cache_creation_input_tokens: 1000,
-          cache_read_input_tokens: 1500,
+          input_tokens: 104_039,
+          output_tokens: 15_453_084,
+          cache_read_input_tokens: 4_715_712_458,
         },
       }),
     }).filter((e) => e.type === "agent_usage");
     expect(events.length).toBe(1);
-    // Expected: 1000*3 + 500*15 + 1000*3.75 + 1500*0.30 = 3000+7500+3750+450 = 14700
-    // 14700 / 1_000_000 = 0.0147
-    expect(events[0].data).toMatch(/cost_usd:0\.0147/);
+    expect(events[0].cost_usd).toBeUndefined();
+    expect(events[0].data).not.toMatch(/cost_usd:/);
+    // raw tokens still captured (tagged) for lifetime-spend bucketing
+    expect(events[0].cache_read_tokens).toBe(4_715_712_458);
+    expect(events[0].usage_scope).toBe("task_cumulative");
   });
 
   test("cost_usd: unknown model → no cost emitted (was: wrong Claude fallback)", () => {
@@ -228,38 +199,6 @@ describe("extractAgentUsage — Issue #4 AgentOutput.usage capture", () => {
     warn.mockRestore();
     expect(events.length).toBe(1);
     expect(events[0].data).not.toMatch(/cost_usd:/);
-  });
-
-  test("cost_usd: Opus 4.8 priced at same standard rate as Opus 4.7", () => {
-    const opus48 = extractEvents({
-      tool_name: "Task",
-      tool_input: { model: "claude-opus-4-8" },
-      tool_response: JSON.stringify({
-        usage: { input_tokens: 1000, output_tokens: 500 },
-      }),
-    }).filter((e) => e.type === "agent_usage");
-    const opus47 = extractEvents({
-      tool_name: "Task",
-      tool_input: { model: "claude-opus-4-7" },
-      tool_response: JSON.stringify({
-        usage: { input_tokens: 1000, output_tokens: 500 },
-      }),
-    }).filter((e) => e.type === "agent_usage");
-    const c48 = opus48[0].data.match(/cost_usd:(\d+\.\d+)/)![1];
-    const c47 = opus47[0].data.match(/cost_usd:(\d+\.\d+)/)![1];
-    expect(c48).toBe(c47);
-  });
-
-  test("cost_usd: date-suffixed model id (haiku-4-5-20251001) resolves via prefix", () => {
-    const events = extractEvents({
-      tool_name: "Task",
-      tool_input: { model: "claude-haiku-4-5-20251001" },
-      tool_response: JSON.stringify({
-        usage: { input_tokens: 1000, output_tokens: 500 },
-      }),
-    }).filter((e) => e.type === "agent_usage");
-    // Haiku rate: 1000*1 + 500*5 = 3500 / 1_000_000 = 0.0035
-    expect(events[0].data).toMatch(/cost_usd:0\.0035/);
   });
 
   test("cost_usd: no model id → no cost emitted (cannot price without a model)", () => {
@@ -331,19 +270,20 @@ describe("extractAgentUsage — Wave 2b structured cost fields", () => {
     expect(ev.output_tokens).toBe(500);
     expect(ev.cache_creation_tokens).toBe(1000);
     expect(ev.cache_read_tokens).toBe(1500);
-    // 1000*3 + 500*15 + 1000*3.75 + 1500*0.30 = 14700 / 1e6 = 0.0147
-    expect(ev.cost_usd).toBeCloseTo(0.0147, 8);
+    // Cumulative Task usage is NOT priced per-turn: no cost_usd, tagged scope.
+    expect(ev.cost_usd).toBeUndefined();
+    expect(ev.usage_scope).toBe("task_cumulative");
   });
 
-  // (b) cost_usd matches the catalog for a known model
-  test("(b) cost_usd matches the catalog for a known model (gpt-5)", () => {
+  // (b) model_id rides the event, but cumulative Task usage yields NO cost_usd
+  test("(b) model_id captured, but no per-turn cost_usd from cumulative Task usage", () => {
     const ev = usageEvent(
       { model: "gpt-5" },
       { input_tokens: 1000, output_tokens: 500 },
     );
-    // gpt-5: 1000*1.25 + 500*10 = 6250 / 1e6 = 0.00625
-    expect(ev.cost_usd).toBeCloseTo(0.00625, 8);
     expect(ev.model_id).toBe("gpt-5");
+    expect(ev.cost_usd).toBeUndefined();
+    expect(ev.usage_scope).toBe("task_cumulative");
   });
 
   // (c) unknown model → tokens present, cost_usd omitted (no Claude fallback)
@@ -376,6 +316,6 @@ describe("extractAgentUsage — Wave 2b structured cost fields", () => {
     );
     expect(ev.data).toMatch(/tokens_in:1000/);
     expect(ev.data).toMatch(/tokens_out:500/);
-    expect(ev.data).toMatch(/cost_usd:0\.0105/);
+    expect(ev.data).not.toMatch(/cost_usd:/);
   });
 });

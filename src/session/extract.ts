@@ -52,6 +52,13 @@ export interface SessionEvent {
   cache_read_tokens?: number;
   cache_creation_tokens?: number;
   cost_usd?: number;
+  /**
+   * "task_cumulative" on agent_usage events whose tokens are a Task sub-agent's
+   * usage SUMMED across its whole run (not one turn). The platform buckets these
+   * as lifetime spend and never prices them per-turn — see
+   * docs/handoff/cumulative-cost-bug.md.
+   */
+  usage_scope?: string;
 }
 
 export interface ToolCall {
@@ -1529,26 +1536,16 @@ function extractAgentUsage(input: HookInput): SessionEvent[] {
     parts.push(`tier:${usage.service_tier.slice(0, 32)}`);
   }
 
-  // Gap #1 (16-oss-verify-gap-prd) — derive cost_usd from per-model pricing
-  // when at least one token count is present. Zero-token case skips cost
-  // so dashboard never shows misleading "$0.00 for nothing" rows.
-  const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
-  const outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
-  const cacheCreate = typeof usage.cache_creation_input_tokens === "number"
-    ? usage.cache_creation_input_tokens
-    : 0;
-  const cacheRead = typeof usage.cache_read_input_tokens === "number"
-    ? usage.cache_read_input_tokens
-    : 0;
+  // CUMULATIVE-USAGE GUARD (docs/handoff/cumulative-cost-bug.md): a Task
+  // tool_response carries the sub-agent's usage SUMMED across its entire run —
+  // every internal turn re-reads the cache, so cache_read reaches the billions.
+  // Pricing that cumulative figure as a single turn produced four-figure
+  // per-event costs ($3,532 with cache_read 4.7B) that poisoned every FinOps
+  // aggregate. We therefore do NOT derive cost_usd here. The raw token counts
+  // stay, tagged usage_scope="task_cumulative", so the platform buckets them as
+  // lifetime spend; real per-turn cost comes only from per-turn signals
+  // (extractTranscriptUsage + each adapter's own session).
   const modelId = resolveModelId(input, out);
-  const anyTokens = inputTokens > 0 || outputTokens > 0 || cacheCreate > 0 || cacheRead > 0;
-  let cost: number | null = null;
-  if (anyTokens) {
-    // null ⇒ unmatched model id (catalog warned once) — skip the cost token
-    // rather than blend a wrong Claude rate (the old non-Claude bug).
-    cost = computeTurnCostUsd(modelId, inputTokens, outputTokens, cacheCreate, cacheRead);
-    if (cost !== null) parts.push(`cost_usd:${formatCostUsd(cost)}`);
-  }
 
   // Wave 2b — emit structured top-level fields alongside the colon-string so
   // the forward envelope (which spreads `...event`) hands the platform typed
@@ -1570,7 +1567,7 @@ function extractAgentUsage(input: HookInput): SessionEvent[] {
   if (typeof usage.cache_creation_input_tokens === "number") {
     event.cache_creation_tokens = usage.cache_creation_input_tokens;
   }
-  if (cost !== null) event.cost_usd = cost;
+  event.usage_scope = "task_cumulative";
 
   return [event];
 }
